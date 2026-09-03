@@ -1,0 +1,228 @@
+{
+  "name": "05 - Live Prospect Finder v1.2",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "7key/find-prospects",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Find Prospects Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://nominatim.openstreetmap.org/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ ($json.body.city || '') + ', ' + ($json.body.country || '') }}"
+            },
+            {
+              "name": "format",
+              "value": "jsonv2"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "7KeyProspectingCRM/1.0 (local prospecting tool)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 12000
+        }
+      },
+      "id": "2",
+      "name": "Geocode City",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Find Prospects Webhook').first().json.body || {};\nconst g = $input.first().json;\n\nif (!g || !g.boundingbox) {\n  throw new Error('City/region not found by Nominatim');\n}\n\nconst bbox = g.boundingbox;\nconst south = Number(bbox[0]);\nconst north = Number(bbox[1]);\nconst west = Number(bbox[2]);\nconst east = Number(bbox[3]);\n\nconst niche = String(input.niche || '').trim();\nconst limit = Math.max(1, Math.min(25, Number(input.limit || 10)));\n\nconst nicheMap = {\n  remodeling: ['remodel','renovat','construction','contractor','builder','carpenter'],\n  roofing: ['roof','roofer'],\n  painting: ['paint','painter'],\n  electrical: ['electric','electrician'],\n  plumbing: ['plumb','plumber'],\n  landscaping: ['landscap','garden','lawn'],\n  cleaning: ['clean','janitor']\n};\n\nconst key = niche.toLowerCase();\nconst tokens = nicheMap[key] || [key].filter(Boolean);\nconst regex = tokens.length ? tokens.join('|') : 'construction|contractor|builder';\n\nlet blocks = [];\nif (key === 'remodeling') {\n  blocks = [\n    `nwr[\"office\"=\"construction_company\"](${south},${west},${north},${east});`,\n    `nwr[\"craft\"=\"builder\"](${south},${west},${north},${east});`,\n    `nwr[\"craft\"=\"carpenter\"](${south},${west},${north},${east});`,\n    `nwr[\"name\"~\"${regex}\",i](${south},${west},${north},${east});`\n  ];\n} else if (key === 'roofing') {\n  blocks = [\n    `nwr[\"craft\"=\"roofer\"](${south},${west},${north},${east});`,\n    `nwr[\"name\"~\"${regex}\",i](${south},${west},${north},${east});`\n  ];\n} else if (key === 'painting') {\n  blocks = [\n    `nwr[\"craft\"=\"painter\"](${south},${west},${north},${east});`,\n    `nwr[\"name\"~\"${regex}\",i](${south},${west},${north},${east});`\n  ];\n} else if (key === 'electrical') {\n  blocks = [\n    `nwr[\"craft\"=\"electrician\"](${south},${west},${north},${east});`,\n    `nwr[\"name\"~\"${regex}\",i](${south},${west},${north},${east});`\n  ];\n} else if (key === 'plumbing') {\n  blocks = [\n    `nwr[\"craft\"=\"plumber\"](${south},${west},${north},${east});`,\n    `nwr[\"name\"~\"${regex}\",i](${south},${west},${north},${east});`\n  ];\n} else if (key === 'landscaping') {\n  blocks = [\n    `nwr[\"craft\"=\"gardener\"](${south},${west},${north},${east});`,\n    `nwr[\"name\"~\"${regex}\",i](${south},${west},${north},${east});`\n  ];\n} else if (key === 'cleaning') {\n  blocks = [\n    `nwr[\"office\"=\"cleaning\"](${south},${west},${north},${east});`,\n    `nwr[\"name\"~\"${regex}\",i](${south},${west},${north},${east});`\n  ];\n} else {\n  blocks = [`nwr[\"name\"~\"${regex}\",i](${south},${west},${north},${east});`];\n}\n\nconst q = `[out:json][timeout:25];\n(\n  ${blocks.join('\\n  ')}\n);\nout center tags ${Math.max(limit * 5, 50)};`;\n\nreturn [{\n  json: {\n    ...input,\n    niche_key: key,\n    niche_tokens: tokens,\n    limit,\n    bbox: {south, north, west, east},\n    overpassQuery: q\n  }\n}];"
+      },
+      "id": "3",
+      "name": "Build Overpass Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://overpass-api.de/api/interpreter",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "={{$json.overpassQuery}}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "7KeyProspectingCRM/1.0 (local prospecting tool)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "4",
+      "name": "Search OpenStreetMap Businesses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Build Overpass Query').first().json;\nconst data = $input.first().json || {};\nconst elements = Array.isArray(data.elements) ? data.elements : [];\n\nconst clean = v => String(v || '').trim();\nconst first = (...vals) => vals.map(clean).find(Boolean) || '';\nconst norm = s => clean(s).toLowerCase();\nconst tokens = Array.isArray(input.niche_tokens) ? input.niche_tokens : [];\n\nconst normalizePhone = (v) => clean(v).replace(/\\s+/g, ' ');\nconst normalizeWebsite = (v) => {\n  const s = clean(v);\n  if (!s) return '';\n  if (/^https?:\\/\\//i.test(s)) return s;\n  return 'https://' + s.replace(/^\\/+/, '');\n};\n\nconst seen = new Set();\nconst out = [];\n\nfor (const el of elements) {\n  const t = el.tags || {};\n  const company = first(t.name, t.operator, t.brand);\n  if (!company) continue;\n\n  const haystack = norm([\n    company,\n    t.office,\n    t.craft,\n    t.shop,\n    t.description,\n    t.operator,\n    t.brand\n  ].filter(Boolean).join(' '));\n\n  const nicheMatch = tokens.length === 0 || tokens.some(tok => haystack.includes(norm(tok)));\n\n  const explicitTradeMatch =\n    (input.niche_key === 'remodeling' && (\n      t.office === 'construction_company' ||\n      t.craft === 'builder' ||\n      t.craft === 'carpenter'\n    )) ||\n    (input.niche_key === 'roofing' && t.craft === 'roofer') ||\n    (input.niche_key === 'painting' && t.craft === 'painter') ||\n    (input.niche_key === 'electrical' && t.craft === 'electrician') ||\n    (input.niche_key === 'plumbing' && t.craft === 'plumber') ||\n    (input.niche_key === 'landscaping' && t.craft === 'gardener');\n\n  if (!nicheMatch && !explicitTradeMatch) continue;\n\n  const website = normalizeWebsite(first(t['contact:website'], t.website, t.url));\n  const phone = normalizePhone(first(t['contact:phone'], t.phone, t['contact:mobile'], t.mobile));\n  const email = first(t['contact:email'], t.email);\n  const facebook = first(t['contact:facebook'], t.facebook);\n  const instagram = first(t['contact:instagram'], t.instagram);\n  const wikidata = first(t.wikidata, t['brand:wikidata']);\n  const operator = first(t.operator);\n  const brand = first(t.brand);\n\n  const lat = el.lat ?? el.center?.lat ?? null;\n  const lon = el.lon ?? el.center?.lon ?? null;\n\n  const street = first(t['addr:street']);\n  const house = first(t['addr:housenumber']);\n  const postcode = first(t['addr:postcode']);\n  const osmCity = first(t['addr:city'], t['addr:town'], t['addr:village'], input.city);\n  const country = first(t['addr:country'], input.country);\n\n  const addressParts = [];\n  if (house || street) addressParts.push([house, street].filter(Boolean).join(' '));\n  if (osmCity) addressParts.push(osmCity);\n  if (postcode) addressParts.push(postcode);\n  if (country) addressParts.push(country);\n  const address = addressParts.join(', ');\n\n  let score = 30;\n  score += explicitTradeMatch ? 25 : 10;\n  if (website) score += 15;\n  if (phone) score += 10;\n  if (email) score += 10;\n  if (wikidata) score += 5;\n  if (facebook || instagram) score += 5;\n\n  const issue = website\n    ? 'Website listed in OpenStreetMap; verify quality before outreach'\n    : 'No website listed in OpenStreetMap';\n\n  const id = `osm-${el.type}-${el.id}`;\n\n  const dedupeKey = email\n    ? `email:${email.toLowerCase()}`\n    : phone\n      ? `phone:${phone.replace(/\\D/g, '')}`\n      : `company:${company.toLowerCase()}|city:${osmCity.toLowerCase()}`;\n\n  if (seen.has(dedupeKey)) continue;\n  seen.add(dedupeKey);\n\n  out.push({\n    json: {\n      id,\n      osm_type: el.type,\n      osm_id: String(el.id),\n      company,\n      niche: input.niche || '',\n      country,\n      city: osmCity,\n      email,\n      phone,\n      website,\n      contact_website: first(t['contact:website']),\n      contact_phone: first(t['contact:phone']),\n      contact_email: first(t['contact:email']),\n      wikidata,\n      brand,\n      operator,\n      facebook,\n      instagram,\n      whatsapp: 'Unknown',\n      status: 'New',\n      verification_status: 'Needs verification',\n      safe_to_outreach: false,\n      niche_match: true,\n      issue,\n      score: Math.min(score, 100),\n      source: 'OpenStreetMap',\n      source_tags: {\n        office: first(t.office),\n        craft: first(t.craft),\n        description: first(t.description),\n        website: first(t.website),\n        contact_website: first(t['contact:website']),\n        phone: first(t.phone),\n        contact_phone: first(t['contact:phone']),\n        email: first(t.email),\n        contact_email: first(t['contact:email']),\n        wikidata,\n        brand,\n        operator,\n        facebook,\n        instagram\n      },\n      address,\n      lat,\n      lon,\n      enrichment_payload: {\n        company,\n        city: osmCity,\n        country,\n        niche: input.niche || '',\n        phone,\n        email,\n        website,\n        wikidata,\n        source: 'OpenStreetMap',\n        id\n      }\n    }\n  });\n\n  if (out.length >= input.limit) break;\n}\n\nreturn out.length\n  ? out\n  : [{json:{prospects:[], empty:true, message:'No niche-matched prospects found in OpenStreetMap for this search.'}}];"
+      },
+      "id": "5",
+      "name": "Normalize Filter Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nif (items.length === 1 && items[0].json.empty) {\n  return [{json:{prospects:[], count:0, message:items[0].json.message}}];\n}\n\nreturn [{\n  json: {\n    prospects: items.map(i => i.json),\n    count: items.length\n  }\n}];"
+      },
+      "id": "6",
+      "name": "Package Prospects",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {}
+      },
+      "id": "7",
+      "name": "Return Prospects To CRM",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1440,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Find Prospects Webhook": {
+      "main": [
+        [
+          {
+            "node": "Geocode City",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Geocode City": {
+      "main": [
+        [
+          {
+            "node": "Build Overpass Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Overpass Query": {
+      "main": [
+        [
+          {
+            "node": "Search OpenStreetMap Businesses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search OpenStreetMap Businesses": {
+      "main": [
+        [
+          {
+            "node": "Normalize Filter Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Filter Score": {
+      "main": [
+        [
+          {
+            "node": "Package Prospects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Package Prospects": {
+      "main": [
+        [
+          {
+            "node": "Return Prospects To CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "00000000-0000-0000-0000-000000000512",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
