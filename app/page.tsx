@@ -165,7 +165,7 @@ export default function Home(){
 
  async function generateDraft(p:Prospect){
    const c=valid(p); if(c.state==="BLOCKED") return alert("Prospect blocked: "+c.e.join(", "));
-   if(!p.contactable) return alert("Enrich this prospect first. Draft generation is available once contactable = true.");
+   if(!p.contactable && !p.email) return alert("Email missing or prospect not contactable.");
    setBusy(p.id+":draft");
    try{
      const raw=await postJson(N8N.prospect,{company:p.company,niche:p.niche,country:p.country,city:p.city,email:p.email,phone:p.phone,website:p.website,issue:p.issue,score:p.score,verification_status:p.verification_status,confidence:p.confidence},20000);
@@ -179,7 +179,8 @@ export default function Home(){
  function verifyProspect(p:Prospect){
    const c=valid(p);
    if(c.state==="BLOCKED") return alert("Prospect blocked: "+c.e.join(", "));
-   if(!p.enriched_at||!p.contactable) return alert("Enrich this prospect first. Human verification is available only after enrichment confirms the prospect is contactable.");
+   if(!p.enriched_at||(!p.contactable && !p.email))
+    return alert("Enrich this prospect first and make sure a valid email is available.");
    const ok=confirm(`Verify ${p.company}?\n\nConfirm that you reviewed the public contact details/website and that a personalized outreach is relevant. This will unlock Approve & Send.`);
    if(!ok) return;
    update(p.id,{
@@ -198,8 +199,42 @@ export default function Home(){
    if(!confirm(`Send email to ${p.email}?`)) return;
    setBusy(p.id+":send");
    try{
-     await postJson(N8N.sendApproved,{approved:true,email:p.email,subject:p.subject,message:p.message,company:p.company,prospect_id:p.id},20000);
-     update(p.id,{status:"Sent",approval_status:"approved"}); setN8n("online");
+    const raw=await postJson(
+      N8N.sendApproved,
+      {
+        approved:true,
+        email:p.email,
+        subject:p.subject,
+        message:p.message,
+        company:p.company,
+        prospect_id:p.id
+      },
+      20000
+    );
+    
+    const data=unwrapN8nResponse(raw);
+    
+    if(data.ok!==true || data.status!=="sent"){
+      const reason=
+        data.reason||
+        data.message||
+        data.error||
+        "n8n did not confirm that Gmail sent the message";
+    
+      update(p.id,{
+        status:"Send failed",
+        approval_status:"failed"
+      });
+    
+      throw new Error(reason);
+    }
+    
+    update(p.id,{
+      status:"Sent",
+      approval_status:"approved"
+    });
+    
+    setN8n("online");
    }catch(err:any){setN8n("offline");alert("Send error: "+(err?.message||err))}
    finally{setBusy(null)}
  }
@@ -220,7 +255,7 @@ export default function Home(){
  const stats=useMemo(()=>({total:ps.length,verified:ps.filter(p=>p.verification_status==="Verified").length,needs:ps.filter(p=>p.verification_status==="Needs verification").length,sent:ps.filter(p=>p.status==="Sent").length}),[ps]);
 
  return <main>
- <aside><h2>7KeySolutions</h2><span>CRM v4.3.3 · Human Verification Gate</span><nav><b><Radar/> Prospect Finder</b><b><Users/> Prospects</b><b><Sparkles/> Enrichment</b><b><Mail/> Email Queue</b><b><Smartphone/> WhatsApp</b><b><ShieldCheck/> Safety</b></nav></aside>
+ <aside><h2>7KeySolutions</h2><span>CRM v4.3.4 · Confirmed Send Gate</span><nav><b><Radar/> Prospect Finder</b><b><Users/> Prospects</b><b><Sparkles/> Enrichment</b><b><Mail/> Email Queue</b><b><Smartphone/> WhatsApp</b><b><ShieldCheck/> Safety</b></nav></aside>
  <section>
  <header><div><small>7KEY SALES ENGINE</small><h1>CRM + n8n</h1></div><div className="headActions"><button className="ghost" onClick={checkN8n}>{n8n==="online"?<Wifi/>:n8n==="offline"?<WifiOff/>:<RefreshCw/>}{n8n}</button><button onClick={add}><Plus/> Add prospect</button></div></header>
 
@@ -238,7 +273,7 @@ export default function Home(){
    <button className="finderBtn" disabled={busy!==null} onClick={findProspects}><Search/> {busy==="finder"?"Finding...":"Find real prospects"}</button>
    <div className="notice">{finderMsg||"Workflow 05 finds prospects. Workflow 06 verifies them before outreach."}</div>
   </div>
-  <div className="card"><h3>n8n endpoints</h3><code>{N8N.finder}</code><code>{N8N.enrich}</code><code>{N8N.prospect}</code><code>{N8N.sendApproved}</code><code>{N8N.whatsappLead}</code><p className="muted">Expected production setup: Finder 05 v1.2 + Enrichment 06 v2.1.</p></div>
+  <div className="card"><h3>n8n endpoints</h3><code>{N8N.finder}</code><code>{N8N.enrich}</code><code>{N8N.prospect}</code><code>{N8N.sendApproved}</code><code>{N8N.whatsappLead}</code><p className="muted">Expected production setup: Finder 05 v1.2 + Enrichment 06 v2.2.</p></div>
  </div>
 
  <div className="card"><div className="tools"><div><Search/><input placeholder="Search prospects..." value={q} onChange={e=>setQ(e.target.value)}/><select value={filter} onChange={e=>setFilter(e.target.value as any)}><option>All</option><option>Verified</option><option>Needs verification</option><option>Not contactable</option></select></div><button className="danger" onClick={()=>{if(confirm("Delete all prospects?"))setPs([])}}><Trash2/> Clear all</button></div>
@@ -249,7 +284,7 @@ export default function Home(){
   {(p.evidence?.length||p.discovery_notes?.length)?<details className="evidence"><summary><Database/> Verification evidence</summary>{p.evidence?.map((x,i)=><div key={'e'+i}>✓ {x}</div>)}{p.discovery_notes?.map((x,i)=><div key={'d'+i}>• {x}</div>)}</details>:null}
   {p.subject&&<div className="draft"><div className="draftHead"><b>{p.subject}</b><button className="ghost" onClick={()=>navigator.clipboard.writeText(p.message||"")}><Copy/> Copy</button></div><textarea value={p.message||""} onChange={e=>update(p.id,{message:e.target.value})}/></div>}
   <div className="meta">{p.source} · {p.niche} · {p.city} {p.country} · score {p.score} · status {p.status}{p.enriched_at?` · enriched ${new Date(p.enriched_at).toLocaleString()}`:""}</div>
-  <div className="acts"><button className="enrichBtn" disabled={busy!==null||v.state==="BLOCKED"} onClick={()=>enrichProspect(p)}><Sparkles/>{busy===p.id+":enrich"?"Enriching...":"Enrich prospect"}</button><button disabled={busy!==null||v.state==="BLOCKED"||!p.contactable} onClick={()=>generateDraft(p)}><RefreshCw/>Generate draft</button><button disabled={busy!==null||v.state==="BLOCKED"||!p.enriched_at||!p.contactable||ready} onClick={()=>verifyProspect(p)}><ShieldCheck/>{ready?"Verified":"Verify prospect"}</button><button disabled={busy!==null||v.state==="BLOCKED"||!p.subject||!ready} onClick={()=>approveSend(p)}><Send/>Approve & Send</button><button disabled={busy!==null||!p.phone||!ready} onClick={()=>notifyWhatsApp(p)}><Smartphone/>WhatsApp notice</button>{p.website&&<a className="linkBtn" href={p.website} target="_blank" rel="noreferrer"><ExternalLink/>Website</a>}<button className="ghost" onClick={()=>update(p.id,{status:"Archived"})}><Archive/>Archive</button><button className="danger" onClick={()=>{if(confirm("Delete this prospect?"))setPs(prev=>prev.filter(x=>x.id!==p.id))}}><Trash2/>Delete</button></div>
+  <div className="acts"><button className="enrichBtn" disabled={busy!==null||v.state==="BLOCKED"} onClick={()=>enrichProspect(p)}><Sparkles/>{busy===p.id+":enrich"?"Enriching...":"Enrich prospect"}</button><button disabled={busy!==null||v.state==="BLOCKED"||(!p.contactable && !p.email)} onClick={()=>generateDraft(p)}><RefreshCw/>Generate draft</button><button disabled={busy!==null||v.state==="BLOCKED"||!p.enriched_at||(!p.contactable && !p.email)||ready} onClick={()=>verifyProspect(p)}><ShieldCheck/>{ready?"Verified":"Verify prospect"}</button><button disabled={busy!==null||v.state==="BLOCKED"||!p.subject||!ready} onClick={()=>approveSend(p)}><Send/>Approve & Send</button><button disabled={busy!==null||!p.phone||!ready} onClick={()=>notifyWhatsApp(p)}><Smartphone/>WhatsApp notice</button>{p.website&&<a className="linkBtn" href={p.website} target="_blank" rel="noreferrer"><ExternalLink/>Website</a>}<button className="ghost" onClick={()=>update(p.id,{status:"Archived"})}><Archive/>Archive</button><button className="danger" onClick={()=>{if(confirm("Delete this prospect?"))setPs(prev=>prev.filter(x=>x.id!==p.id))}}><Trash2/>Delete</button></div>
  </div>})}</div></div>
  </section></main>
 }
