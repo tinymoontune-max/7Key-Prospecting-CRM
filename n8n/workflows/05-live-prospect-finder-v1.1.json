@@ -1,0 +1,228 @@
+{
+  "name": "05 - Live Prospect Finder v1.1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "7key/find-prospects",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Find Prospects Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://nominatim.openstreetmap.org/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ ($json.body.city || '') + ', ' + ($json.body.country || '') }}"
+            },
+            {
+              "name": "format",
+              "value": "jsonv2"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "7KeyProspectingCRM/1.0 (local prospecting tool)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 12000
+        }
+      },
+      "id": "2",
+      "name": "Geocode City",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Find Prospects Webhook').first().json.body || {};\nconst g = $input.first().json;\n\nif (!g || !g.boundingbox) {\n  throw new Error('City/region not found by Nominatim');\n}\n\nconst bbox = g.boundingbox;\nconst south = Number(bbox[0]);\nconst north = Number(bbox[1]);\nconst west = Number(bbox[2]);\nconst east = Number(bbox[3]);\n\nconst niche = String(input.niche || '').trim();\nconst limit = Math.max(1, Math.min(25, Number(input.limit || 10)));\n\nconst escaped = niche.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\nconst nameRegex = niche\n  ? `${escaped}|remodel|renovation|construction|contractor|builder|roof|electric|landscap|plumb|paint|clean`\n  : `remodel|renovation|construction|contractor|builder|roof|electric|landscap|plumb|paint|clean`;\n\nconst q = `[out:json][timeout:25];\n(\n  nwr[\"office\"=\"construction_company\"](${south},${west},${north},${east});\n  nwr[\"craft\"=\"builder\"](${south},${west},${north},${east});\n  nwr[\"craft\"=\"carpenter\"](${south},${west},${north},${east});\n  nwr[\"craft\"=\"roofer\"](${south},${west},${north},${east});\n  nwr[\"craft\"=\"electrician\"](${south},${west},${north},${east});\n  nwr[\"craft\"=\"plumber\"](${south},${west},${north},${east});\n  nwr[\"craft\"=\"painter\"](${south},${west},${north},${east});\n  nwr[\"name\"~\"${nameRegex}\",i](${south},${west},${north},${east});\n);\nout center tags ${Math.max(limit * 4, 40)};`;\n\nreturn [{\n  json: {\n    ...input,\n    limit,\n    bbox: {south, north, west, east},\n    overpassQuery: q\n  }\n}];"
+      },
+      "id": "3",
+      "name": "Build Overpass Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://overpass-api.de/api/interpreter",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "={{$json.overpassQuery}}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "7KeyProspectingCRM/1.0 (local prospecting tool)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "4",
+      "name": "Search OpenStreetMap Businesses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Build Overpass Query').first().json;\nconst data = $input.first().json || {};\nconst elements = Array.isArray(data.elements) ? data.elements : [];\n\nconst clean = v => String(v || '').trim();\nconst first = (...vals) => vals.map(clean).find(Boolean) || '';\n\nconst normalizePhone = (v) => clean(v).replace(/\\s+/g, ' ');\nconst normalizeWebsite = (v) => {\n  const s = clean(v);\n  if (!s) return '';\n  if (/^https?:\\/\\//i.test(s)) return s;\n  return 'https://' + s.replace(/^\\/+/, '');\n};\n\nconst seen = new Set();\nconst out = [];\n\nfor (const el of elements) {\n  const t = el.tags || {};\n  const company = first(t.name, t.operator, t.brand);\n  if (!company) continue;\n\n  const website = normalizeWebsite(first(\n    t['contact:website'],\n    t.website,\n    t.url\n  ));\n  const phone = normalizePhone(first(\n    t['contact:phone'],\n    t.phone,\n    t['contact:mobile'],\n    t.mobile\n  ));\n  const email = first(\n    t['contact:email'],\n    t.email\n  );\n\n  const facebook = first(\n    t['contact:facebook'],\n    t.facebook\n  );\n  const instagram = first(\n    t['contact:instagram'],\n    t.instagram\n  );\n\n  const wikidata = first(t.wikidata, t['brand:wikidata']);\n  const operator = first(t.operator);\n  const brand = first(t.brand);\n\n  const lat = el.lat ?? el.center?.lat ?? null;\n  const lon = el.lon ?? el.center?.lon ?? null;\n\n  const street = first(t['addr:street']);\n  const house = first(t['addr:housenumber']);\n  const postcode = first(t['addr:postcode']);\n  const osmCity = first(t['addr:city'], t['addr:town'], t['addr:village'], input.city);\n  const country = first(t['addr:country'], input.country);\n\n  const addressParts = [];\n  if (house || street) addressParts.push([house, street].filter(Boolean).join(' '));\n  if (osmCity) addressParts.push(osmCity);\n  if (postcode) addressParts.push(postcode);\n  if (country) addressParts.push(country);\n  const address = addressParts.join(', ');\n\n  let score = 35;\n  if (website) score += 25;\n  if (phone) score += 15;\n  if (email) score += 15;\n  if (wikidata) score += 10;\n  if (facebook || instagram) score += 5;\n\n  const issue = website\n    ? 'Website listed in OpenStreetMap; verify quality before outreach'\n    : 'No website listed in OpenStreetMap';\n\n  const id = `osm-${el.type}-${el.id}`;\n\n  const dedupeKey = [\n    email.toLowerCase(),\n    phone.replace(/\\D/g, ''),\n    `${company.toLowerCase()}|${osmCity.toLowerCase()}`\n  ].filter(Boolean).join('|');\n\n  if (seen.has(dedupeKey)) continue;\n  seen.add(dedupeKey);\n\n  out.push({\n    json: {\n      id,\n      osm_type: el.type,\n      osm_id: String(el.id),\n      company,\n      niche: input.niche || '',\n      country,\n      city: osmCity,\n      email,\n      phone,\n      website,\n      contact_website: first(t['contact:website']),\n      contact_phone: first(t['contact:phone']),\n      contact_email: first(t['contact:email']),\n      wikidata,\n      brand,\n      operator,\n      facebook,\n      instagram,\n      whatsapp: 'Unknown',\n      status: 'New',\n      verification_status: 'Needs verification',\n      safe_to_outreach: false,\n      issue,\n      score: Math.min(score, 100),\n      source: 'OpenStreetMap',\n      source_tags: {\n        website: first(t.website),\n        contact_website: first(t['contact:website']),\n        phone: first(t.phone),\n        contact_phone: first(t['contact:phone']),\n        email: first(t.email),\n        contact_email: first(t['contact:email']),\n        wikidata,\n        brand,\n        operator,\n        facebook,\n        instagram\n      },\n      address,\n      lat,\n      lon\n    }\n  });\n\n  if (out.length >= input.limit) break;\n}\n\nreturn out.length ? out : [{json:{prospects:[], empty:true, message:'No matching prospects found in OpenStreetMap for this search.'}}];"
+      },
+      "id": "5",
+      "name": "Normalize Score Deduplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nif (items.length === 1 && items[0].json.empty) {\n  return [{json:{prospects:[], count:0, message:items[0].json.message}}];\n}\n\nreturn [{\n  json: {\n    prospects: items.map(i => i.json),\n    count: items.length\n  }\n}];"
+      },
+      "id": "6",
+      "name": "Package Prospects",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {}
+      },
+      "id": "7",
+      "name": "Return Prospects To CRM",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1440,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Find Prospects Webhook": {
+      "main": [
+        [
+          {
+            "node": "Geocode City",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Geocode City": {
+      "main": [
+        [
+          {
+            "node": "Build Overpass Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Overpass Query": {
+      "main": [
+        [
+          {
+            "node": "Search OpenStreetMap Businesses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search OpenStreetMap Businesses": {
+      "main": [
+        [
+          {
+            "node": "Normalize Score Deduplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Score Deduplicate": {
+      "main": [
+        [
+          {
+            "node": "Package Prospects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Package Prospects": {
+      "main": [
+        [
+          {
+            "node": "Return Prospects To CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "00000000-0000-0000-0000-000000000511",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

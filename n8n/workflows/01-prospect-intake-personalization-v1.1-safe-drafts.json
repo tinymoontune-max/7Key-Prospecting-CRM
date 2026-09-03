@@ -1,0 +1,75 @@
+{
+  "name": "01 - Prospect Intake Personalization v1.1 Safe Drafts",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "7key/prospect",
+        "responseMode": "lastNode"
+      },
+      "id": "webhook1",
+      "name": "CRM Prospect Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json.body || $json;\n\nconst company = String(p.company || '').trim() || 'there';\nconst niche = String(p.niche || 'local service').trim();\nconst country = String(p.country || '').trim();\nconst city = String(p.city || '').trim();\nconst website = String(p.website || '').trim();\nconst rawIssue = String(p.issue || '').trim();\n\n// Internal CRM/enrichment notes must NEVER be copied into client-facing outreach.\nconst internalOnlyPatterns = [\n  /needs? verification/i,\n  /do not claim/i,\n  /safe[_ ]?to[_ ]?outreach/i,\n  /verification[_ ]?status/i,\n  /contactable/i,\n  /wikidata/i,\n  /openstreetmap|\\bosm\\b/i,\n  /generic search[- ]engine scraping/i,\n  /prospect still/i,\n  /internal/i,\n];\n\nconst isClientSafeIssue = rawIssue && !internalOnlyPatterns.some((rx) => rx.test(rawIssue));\nconst safeIssue = isClientSafeIssue ? rawIssue.replace(/\\.+$/, '') : '';\n\nconst location = city\n  ? `${city}${country ? `, ${country}` : ''}`\n  : country;\n\nlet websiteLine;\nif (website) {\n  if (safeIssue) {\n    websiteLine = `I took a look at your website and noticed ${safeIssue.charAt(0).toLowerCase() + safeIssue.slice(1)}.`;\n  } else {\n    websiteLine = `I took a look at your website and saw an opportunity to make the online presentation clearer and make it even easier for potential customers to request a quote.`;\n  }\n} else {\n  websiteLine = `I couldn't find a clear dedicated website for ${company}, so I thought a simple site focused on your services and quote requests could be useful.`;\n}\n\nconst where = location ? ` in ${location}` : '';\nconst variants = [\n  {\n    subject: `Quick idea for ${company}`,\n    opener: `I came across ${company} while looking at ${niche} businesses${where}.`,\n  },\n  {\n    subject: `Website idea for ${company}`,\n    opener: `I found ${company} while researching local ${niche} companies${where}.`,\n  },\n  {\n    subject: `A small idea for ${company}`,\n    opener: `I was checking ${niche} businesses${where} and came across ${company}.`,\n  },\n];\n\nconst v = variants[Math.floor(Math.random() * variants.length)];\nconst message = `Hi ${company} team,\\n\\n${v.opener}\\n\\n${websiteLine}\\n\\nI design clean websites for local service businesses and can also help with branding or flyers when useful.\\n\\nI can prepare a free homepage concept first so you can see the direction before deciding anything.\\n\\nWould you like me to send it?\\n\\nBest,\\n7KeySolutions`;\n\nreturn [{\n  json: {\n    ...p,\n    subject: v.subject,\n    message,\n    approval_status: 'pending',\n    created_at: new Date().toISOString(),\n  },\n}];"
+      },
+      "id": "code1",
+      "name": "Personalize Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}"
+      },
+      "id": "respond1",
+      "name": "Return Draft To CRM",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "CRM Prospect Webhook": {
+      "main": [
+        [
+          {
+            "node": "Personalize Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Personalize Message": {
+      "main": [
+        [
+          {
+            "node": "Return Draft To CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

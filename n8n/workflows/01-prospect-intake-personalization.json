@@ -1,0 +1,75 @@
+{
+  "name": "7Key - Prospect Intake & Personalization",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "7key/prospect",
+        "responseMode": "lastNode"
+      },
+      "id": "webhook1",
+      "name": "CRM Prospect Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json.body || $json;\nconst company = p.company || 'there';\nconst niche = p.niche || 'local service';\nconst country = p.country || '';\nconst issue = p.issue || 'your online presence could convert more visitors into quote requests';\nconst websiteLine = p.website\n  ? `I took a look at your online presence and noticed ${issue}.`\n  : `I noticed ${company} has a real local presence, but I couldn't find a strong dedicated website that makes it easy to request a quote.`;\n\nconst variants = [\n  {subject:`Quick idea for ${company}`, opener:`I came across ${company} while looking at ${niche} businesses in ${country}.`},\n  {subject:`Website idea for ${company}`, opener:`I found ${company} while researching local ${niche} companies in ${country}.`},\n  {subject:`A small idea for ${company}`, opener:`I was checking ${niche} businesses in ${country} and came across ${company}.`}\n];\nconst v = variants[Math.floor(Math.random()*variants.length)];\nconst message = `Hi ${company} team,\\n\\n${v.opener}\\n\\n${websiteLine}\\n\\nI design clean websites for local service businesses, and I can also help with branding or flyers when needed.\\n\\nI can prepare a free homepage concept first so you can judge the direction before deciding anything.\\n\\nWould you like me to send the concept?\\n\\nBest,\\n7KeySolutions`;\n\nreturn [{json:{...p, subject:v.subject, message, approval_status:'pending', created_at:new Date().toISOString()}}];"
+      },
+      "id": "code1",
+      "name": "Personalize Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}"
+      },
+      "id": "respond1",
+      "name": "Return Draft To CRM",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "CRM Prospect Webhook": {
+      "main": [
+        [
+          {
+            "node": "Personalize Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Personalize Message": {
+      "main": [
+        [
+          {
+            "node": "Return Draft To CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

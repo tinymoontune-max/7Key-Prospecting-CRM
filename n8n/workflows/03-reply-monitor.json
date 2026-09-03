@@ -1,0 +1,90 @@
+{
+  "name": "7Key - Reply Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule3",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 25,
+        "filters": {
+          "readStatus": "unread"
+        }
+      },
+      "id": "gmailread",
+      "name": "Read Unread Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_IN_N8N",
+          "name": "7Key Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n const j = item.json;\n const text = String(j.textPlain || j.snippet || j.text || '').toLowerCase();\n let intent = 'replied';\n if (/interested|yes|send|show me|price|cost|quote|website|call|meeting/.test(text)) intent='interested';\n if (/unsubscribe|remove me|stop|not interested|no thanks|do not contact/.test(text)) intent='opt_out';\n return {json:{...j, detected_intent:intent, stop_followups:true, detected_at:new Date().toISOString()}};\n});"
+      },
+      "id": "classifyreply",
+      "name": "Classify Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Read Unread Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Unread Gmail": {
+      "main": [
+        [
+          {
+            "node": "Classify Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

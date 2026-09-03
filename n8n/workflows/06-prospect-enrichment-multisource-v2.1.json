@@ -1,0 +1,528 @@
+{
+  "name": "06 - Prospect Enrichment Multi-Source v2.1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "7key/enrich-prospect",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Enrich Prospect Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json.body || {};\nif (!p.company) throw new Error('company is required');\n\nconst clean = v => String(v || '').trim();\nconst sources = [];\nif (p.source) sources.push(clean(p.source));\nif (p.website) sources.push('Existing prospect data');\n\nreturn [{\n  json: {\n    ...p,\n    company: clean(p.company),\n    city: clean(p.city),\n    country: clean(p.country),\n    niche: clean(p.niche),\n    phone: clean(p.phone),\n    email: clean(p.email),\n    website: clean(p.website),\n    wikidata: clean(p.wikidata),\n    osmId: clean(p.id || p.osm_id),\n    sources: [...new Set(sources)],\n    website_candidate: clean(p.website),\n    discovery_attempted: false,\n    discovery_method: '',\n    discovery_notes: []\n  }\n}];"
+      },
+      "id": "2",
+      "name": "Prepare Enrichment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-wikidata",
+              "leftValue": "={{$json.wikidata}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3",
+      "name": "Has Wikidata?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://www.wikidata.org/wiki/Special:EntityData/' + $json.wikidata + '.json' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "7KeyProspectingCRM/1.0 (local enrichment; contact: 7keysolutions.online)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 12000
+        }
+      },
+      "id": "4",
+      "name": "Fetch Wikidata Entity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        -180
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $('Prepare Enrichment').first().json;\nconst data = $input.first().json || {};\nconst entity = data.entities?.[src.wikidata] || {};\nconst claims = entity.claims || {};\n\nconst claimValue = (pid) => {\n  const rows = claims[pid] || [];\n  for (const r of rows) {\n    const v = r?.mainsnak?.datavalue?.value;\n    if (typeof v === 'string' && v.trim()) return v.trim();\n  }\n  return '';\n};\n\nconst website = claimValue('P856');\nconst phone = claimValue('P1329');\nconst email = claimValue('P968');\n\nreturn [{\n  json: {\n    ...src,\n    discovery_attempted: true,\n    discovery_method: 'Wikidata',\n    wikidataWebsite: website,\n    wikidataPhone: phone,\n    wikidataEmail: email,\n    website_candidate: src.website || website || '',\n    discovery_notes: [\n      ...(src.discovery_notes || []),\n      website ? 'Official website candidate found in Wikidata' : 'No official website in Wikidata',\n      phone ? 'Phone found in Wikidata' : 'No phone in Wikidata',\n      email ? 'Email found in Wikidata' : 'No email in Wikidata'\n    ]\n  }\n}];"
+      },
+      "id": "5",
+      "name": "Extract Wikidata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $('Prepare Enrichment').first().json;\nreturn [{\n  json: {\n    ...src,\n    discovery_attempted: true,\n    discovery_method: 'No linked discovery source',\n    discovery_notes: [\n      ...(src.discovery_notes || []),\n      'No Wikidata id supplied by current prospect source',\n      'No generic search-engine scraping is performed'\n    ]\n  }\n}];"
+      },
+      "id": "6",
+      "name": "No Linked Discovery Source",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-site",
+              "leftValue": "={{$json.website_candidate}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7",
+      "name": "Has Website Candidate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.website_candidate}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; 7KeyProspectingCRM/1.0)"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 12000
+        }
+      },
+      "id": "8",
+      "name": "Fetch Official Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        -160
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $('Has Website Candidate?').first().json;\nconst raw = $input.first().json;\nlet html = '';\nif (typeof raw === 'string') html = raw;\nelse if (raw && typeof raw.data === 'string') html = raw.data;\nelse html = JSON.stringify(raw || {});\n\nconst norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();\nconst companyTokens = norm(src.company).split(' ').filter(x => x.length >= 4);\nconst cityTokens = norm(src.city).split(' ').filter(x => x.length >= 4);\nconst pageNorm = norm(html.slice(0, 250000));\n\nconst companyHits = companyTokens.filter(t => pageNorm.includes(t)).length;\nconst cityHits = cityTokens.filter(t => pageNorm.includes(t)).length;\n\nconst emails = [...new Set([\n  ...[...html.matchAll(/mailto:([^\"'?<>\\s]+)/gi)].map(m=>m[1]),\n  ...(html.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi)||[])\n])].filter(e => !/example\\.|sentry\\.|wixpress\\.|cloudflare/i.test(e));\n\nconst phones = [...new Set([\n  ...[...html.matchAll(/tel:([^\"'<>\\s]+)/gi)].map(m=>m[1]),\n  ...(html.match(/(?:\\+?1[\\s().-]?)?\\(?\\d{3}\\)?[\\s.-]\\d{3}[\\s.-]\\d{4}/g)||[])\n])];\n\nconst links = [...html.matchAll(/href=[\"']([^\"']+)[\"']/gi)].map(m=>m[1]);\nconst contact = links.find(h => /contact|quote|estimate|get-in-touch/i.test(h)) || '';\nlet contactUrl = '';\nif (contact) { try { contactUrl = new URL(contact, src.website_candidate).href; } catch {} }\n\nreturn [{\n  json: {\n    ...src,\n    website_live: html.length > 200,\n    company_match_hits: companyHits,\n    city_match_hits: cityHits,\n    homepageEmail: emails[0] || '',\n    homepagePhone: phones[0] || '',\n    contactUrl,\n    homepageChecked: true\n  }\n}];"
+      },
+      "id": "9",
+      "name": "Validate And Extract Website",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-contact",
+              "leftValue": "={{$json.contactUrl}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "10",
+      "name": "Has Contact Page?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.contactUrl}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; 7KeyProspectingCRM/1.0)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 12000
+        }
+      },
+      "id": "11",
+      "name": "Fetch Contact Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        -240
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $('Validate And Extract Website').first().json;\nconst raw = $input.first().json;\nlet html = '';\nif (typeof raw === 'string') html = raw;\nelse if (raw && typeof raw.data === 'string') html = raw.data;\nelse html = JSON.stringify(raw || {});\n\nconst emails = [...new Set([\n  ...[...html.matchAll(/mailto:([^\"'?<>\\s]+)/gi)].map(m=>m[1]),\n  ...(html.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi)||[])\n])].filter(e => !/example\\.|sentry\\.|wixpress\\.|cloudflare/i.test(e));\n\nconst phones = [...new Set([\n  ...[...html.matchAll(/tel:([^\"'<>\\s]+)/gi)].map(m=>m[1]),\n  ...(html.match(/(?:\\+?1[\\s().-]?)?\\(?\\d{3}\\)?[\\s.-]\\d{3}[\\s.-]\\d{4}/g)||[])\n])];\n\nreturn [{\n  json: {\n    ...src,\n    contactPageChecked: true,\n    contactPageEmail: emails[0] || '',\n    contactPagePhone: phones[0] || ''\n  }\n}];"
+      },
+      "id": "12",
+      "name": "Extract Contact Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{...$json,contactPageChecked:false,contactPageEmail:'',contactPagePhone:''}}];"
+      },
+      "id": "13",
+      "name": "Skip Contact Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{...$json,website_live:false,homepageChecked:false,contactPageChecked:false,company_match_hits:0,city_match_hits:0,homepageEmail:'',homepagePhone:'',contactPageEmail:'',contactPagePhone:''}}];"
+      },
+      "id": "14",
+      "name": "No Website Candidate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json;\nconst website = p.website_candidate || p.website || '';\nconst email = p.contactPageEmail || p.homepageEmail || p.wikidataEmail || p.email || '';\nconst phone = p.contactPagePhone || p.homepagePhone || p.wikidataPhone || p.phone || '';\n\nlet confidence = 0;\nconst evidence = [];\nconst provenance = {};\n\nif (p.osmId || (p.sources || []).includes('OpenStreetMap')) {\n  confidence += 15;\n  evidence.push('OSM record present');\n}\nif (p.wikidata) {\n  confidence += 10;\n  evidence.push('Linked Wikidata entity present');\n}\nif (website) {\n  confidence += 15;\n  provenance.website = p.wikidataWebsite ? 'Wikidata P856 / existing prospect data' : 'Existing prospect data';\n  evidence.push('Website candidate present');\n}\nif (p.website_live) {\n  confidence += 15;\n  evidence.push('Website reachable');\n}\nif ((p.company_match_hits || 0) >= 1) {\n  confidence += 15;\n  evidence.push('Company name matches website content');\n}\nif ((p.city_match_hits || 0) >= 1) {\n  confidence += 10;\n  evidence.push('City matches website content');\n}\nif (email) {\n  confidence += 10;\n  provenance.email = p.contactPageEmail ? 'Official website contact page'\n    : p.homepageEmail ? 'Official website homepage'\n    : p.wikidataEmail ? 'Wikidata'\n    : 'Existing prospect data';\n  evidence.push('Public business email found');\n}\nif (phone) {\n  confidence += 10;\n  provenance.phone = p.contactPagePhone ? 'Official website contact page'\n    : p.homepagePhone ? 'Official website homepage'\n    : p.wikidataPhone ? 'Wikidata'\n    : 'Existing prospect data';\n  evidence.push('Public business phone found');\n}\n\nconfidence = Math.min(100, confidence);\n\nlet verification_status = 'Needs verification';\nif (website && p.website_live && (email || phone) && (p.company_match_hits || 0) >= 1 && confidence >= 70) {\n  verification_status = 'Verified';\n}\n\nreturn [{\n  json: {\n    company: p.company,\n    city: p.city || '',\n    country: p.country || '',\n    niche: p.niche || '',\n    website,\n    email,\n    phone,\n    verification_status,\n    confidence,\n    contactable: Boolean(email || phone),\n    discovery_attempted: Boolean(p.discovery_attempted),\n    discovery_method: p.discovery_method || '',\n    evidence,\n    provenance,\n    discovery_notes: p.discovery_notes || [],\n    safe_to_outreach: verification_status === 'Verified',\n    notes: verification_status === 'Verified'\n      ? 'Prospect passed linked-source and official-site verification.'\n      : 'Prospect still needs verification. Do not claim that no website exists.',\n    enriched_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "15",
+      "name": "Score And Verify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {}
+      },
+      "id": "16",
+      "name": "Return Enriched Prospect",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2880,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Enrich Prospect Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Has Wikidata?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Wikidata?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Wikidata Entity",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Linked Discovery Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Wikidata Entity": {
+      "main": [
+        [
+          {
+            "node": "Extract Wikidata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Wikidata": {
+      "main": [
+        [
+          {
+            "node": "Has Website Candidate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Linked Discovery Source": {
+      "main": [
+        [
+          {
+            "node": "Has Website Candidate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Website Candidate?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Official Website",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Website Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Official Website": {
+      "main": [
+        [
+          {
+            "node": "Validate And Extract Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate And Extract Website": {
+      "main": [
+        [
+          {
+            "node": "Has Contact Page?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Contact Page?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Contact Page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Contact Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Contact Page": {
+      "main": [
+        [
+          {
+            "node": "Extract Contact Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Contact Page": {
+      "main": [
+        [
+          {
+            "node": "Score And Verify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Contact Page": {
+      "main": [
+        [
+          {
+            "node": "Score And Verify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Website Candidate": {
+      "main": [
+        [
+          {
+            "node": "Score And Verify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score And Verify": {
+      "main": [
+        [
+          {
+            "node": "Return Enriched Prospect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "00000000-0000-0000-0000-000000000621",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

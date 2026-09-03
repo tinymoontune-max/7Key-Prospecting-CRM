@@ -1,0 +1,193 @@
+{
+  "name": "05 - Live Prospect Finder",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "7key/find-prospects",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Find Prospects Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&q=' + encodeURIComponent(($json.body.city || '') + ', ' + ($json.body.country || '')) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "7KeySolutions-ProspectFinder/1.0 (digital7key@gmail.com)"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2",
+      "name": "Geocode City",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Find Prospects Webhook').first().json.body || {};\nconst geo = $input.first().json;\nif (!Array.isArray(geo) || geo.length === 0) throw new Error('City/region not found by Nominatim');\nconst g = geo[0];\nconst bbox = g.boundingbox || [];\nconst south = Number(bbox[0]), north = Number(bbox[1]), west = Number(bbox[2]), east = Number(bbox[3]);\nif (![south,north,west,east].every(Number.isFinite)) throw new Error('Invalid bounding box');\n\nconst niche = String(input.niche || '').toLowerCase();\nconst tagMap = [\n  [/electric|electrician/, ['craft','electrician']],\n  [/roof/, ['craft','roofer']],\n  [/paint/, ['craft','painter']],\n  [/plumb/, ['craft','plumber']],\n  [/hvac|heating|air condition/, ['craft','hvac']],\n  [/landscap|garden/, ['craft','landscaper']],\n  [/clean/, ['craft','cleaner']],\n  [/carpenter|wood/, ['craft','carpenter']],\n  [/mason|masonry/, ['craft','stonemason']],\n  [/construction|remodel|renovat|contractor/, ['office','construction_company']]\n];\nlet pair = ['name', niche];\nfor (const [rx,p] of tagMap) if (rx.test(niche)) { pair=p; break; }\n\nconst [key,val] = pair;\nconst q = `[out:json][timeout:25];\n(\n  node[\"${key}\"=\"${val}\"](${south},${west},${north},${east});\n  way[\"${key}\"=\"${val}\"](${south},${west},${north},${east});\n  relation[\"${key}\"=\"${val}\"](${south},${west},${north},${east});\n);\nout center tags;`;\n\nreturn [{json:{...input, overpassQuery:q, geocode:g.display_name, bbox:{south,west,north,east}}}];"
+      },
+      "id": "3",
+      "name": "Build Overpass Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://overpass-api.de/api/interpreter",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded"
+            },
+            {
+              "name": "User-Agent",
+              "value": "7KeySolutions-ProspectFinder/1.0"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "={{$json.overpassQuery}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4",
+      "name": "Search OpenStreetMap Businesses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const req = $('Build Overpass Query').first().json;\nconst data = $input.first().json;\nconst els = Array.isArray(data.elements) ? data.elements : [];\nconst limit = Math.min(Math.max(Number(req.limit || 10),1),25);\nconst seen = new Set();\nconst prospects = [];\n\nfunction val(t,...keys){ for(const k of keys){ if(t?.[k]) return String(t[k]).trim(); } return ''; }\nfunction normPhone(p){ return p.replace(/[^+\\d]/g,''); }\n\nfor (const el of els) {\n  const t = el.tags || {};\n  const company = val(t,'name','brand','operator');\n  if (!company) continue;\n  const phone = val(t,'contact:phone','phone','contact:mobile','mobile');\n  const email = val(t,'contact:email','email');\n  const website = val(t,'contact:website','website','url');\n  const street = [val(t,'addr:housenumber'),val(t,'addr:street')].filter(Boolean).join(' ');\n  const locality = val(t,'addr:city','addr:town','addr:village','addr:suburb') || req.city || '';\n  const address = [street,locality,req.country].filter(Boolean).join(', ');\n  const key=(company+'|'+normPhone(phone)+'|'+email).toLowerCase();\n  if (seen.has(key)) continue;\n  seen.add(key);\n\n  let score=55;\n  let issue='Needs qualification';\n  if (!website) {score+=25; issue='No website listed in OpenStreetMap';}\n  if (phone) score+=10;\n  if (email) score+=10;\n  if (!phone && !email) score-=20;\n  score=Math.max(0,Math.min(100,score));\n\n  prospects.push({\n    id:`osm-${el.type}-${el.id}`,\n    company,\n    niche:req.niche || '',\n    country:req.country || '',\n    city:req.city || locality,\n    email,\n    phone,\n    website,\n    whatsapp:'Unknown',\n    status:'New',\n    issue,\n    score,\n    source:'OpenStreetMap',\n    address,\n    osm_type:el.type,\n    osm_id:el.id\n  });\n}\nprospects.sort((a,b)=>b.score-a.score);\nreturn [{json:{ok:true,query:{country:req.country,city:req.city,niche:req.niche},geocode:req.geocode,count:prospects.slice(0,limit).length,prospects:prospects.slice(0,limit)}}];"
+      },
+      "id": "5",
+      "name": "Normalize Score Deduplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {}
+      },
+      "id": "6",
+      "name": "Return Prospects To CRM",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1340,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Find Prospects Webhook": {
+      "main": [
+        [
+          {
+            "node": "Geocode City",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Geocode City": {
+      "main": [
+        [
+          {
+            "node": "Build Overpass Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Overpass Query": {
+      "main": [
+        [
+          {
+            "node": "Search OpenStreetMap Businesses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search OpenStreetMap Businesses": {
+      "main": [
+        [
+          {
+            "node": "Normalize Score Deduplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Score Deduplicate": {
+      "main": [
+        [
+          {
+            "node": "Return Prospects To CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "00000000-0000-0000-0000-000000000005",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

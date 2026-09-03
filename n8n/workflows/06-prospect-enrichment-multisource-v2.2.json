@@ -1,0 +1,392 @@
+{
+  "name": "06 - Prospect Enrichment Multi-Source v2.2",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "7key/enrich-prospect-v2-2",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Enrich Prospect Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json.body || {};\nif (!p.company) throw new Error('company is required');\nconst clean=v=>String(v||'').trim();\nreturn [{json:{...p,company:clean(p.company),city:clean(p.city),country:clean(p.country),niche:clean(p.niche),phone:clean(p.phone),email:clean(p.email),website:clean(p.website),wikidata:clean(p.wikidata),osmId:clean(p.id||p.osm_id),website_candidate:clean(p.website),sources:[...new Set([p.source,'Existing prospect data'].filter(Boolean))],discovery_notes:[]}}];"
+      },
+      "id": "2",
+      "name": "Prepare Enrichment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-site",
+              "leftValue": "={{$json.website_candidate}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3",
+      "name": "Has Website?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.website_candidate}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; 7KeyProspectingCRM/2.2)"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 12000
+        }
+      },
+      "id": "4",
+      "name": "Fetch Official Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        -120
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const src=$('Prepare Enrichment').first().json; const raw=$input.first().json; let html=typeof raw==='string'?raw:(raw&&typeof raw.data==='string'?raw.data:JSON.stringify(raw||{})); const emails=[...new Set([...[...html.matchAll(/mailto:([^\\\"'?<>\\s]+)/gi)].map(m=>m[1]),...(html.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi)||[])])].filter(e=>!/example\\.|sentry\\.|wixpress\\.|cloudflare/i.test(e)); const links=[...html.matchAll(/href=[\\\"']([^\\\"']+)[\\\"']/gi)].map(m=>m[1]); const contact=links.find(h=>/contact|quote|estimate|get-in-touch/i.test(h))||''; let contactUrl=''; if(contact){try{contactUrl=new URL(contact,src.website_candidate).href}catch{}} return [{json:{...src,website_live:html.length>200,homepageEmail:emails[0]||'',homepageEmails:emails,contactUrl,homepageChecked:true}}];"
+      },
+      "id": "5",
+      "name": "Extract Homepage Contact",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-contact",
+              "leftValue": "={{$json.contactUrl}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6",
+      "name": "Has Contact Page?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.contactUrl}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; 7KeyProspectingCRM/2.2)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 12000
+        }
+      },
+      "id": "7",
+      "name": "Fetch Contact Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        -220
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const src=$('Extract Homepage Contact').first().json; const raw=$input.first().json; let html=typeof raw==='string'?raw:(raw&&typeof raw.data==='string'?raw.data:JSON.stringify(raw||{})); const emails=[...new Set([...[...html.matchAll(/mailto:([^\\\"'?<>\\s]+)/gi)].map(m=>m[1]),...(html.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi)||[])])].filter(e=>!/example\\.|sentry\\.|wixpress\\.|cloudflare/i.test(e)); return [{json:{...src,contactPageChecked:true,contactPageEmail:emails[0]||'',contactPageEmails:emails}}];"
+      },
+      "id": "8",
+      "name": "Extract Contact Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{...$json,contactPageChecked:false,contactPageEmail:'',contactPageEmails:[]}}];"
+      },
+      "id": "9",
+      "name": "Skip Contact Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{...$json,website_live:false,homepageChecked:false,homepageEmail:'',homepageEmails:[],contactPageChecked:false,contactPageEmail:'',contactPageEmails:[]}}];"
+      },
+      "id": "10",
+      "name": "No Website",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p=$json; const norm=v=>String(v||'').trim().toLowerCase(); const officialEmail=p.contactPageEmail||p.homepageEmail||''; const osmEmail=p.email||''; const conflict=!!officialEmail&&!!osmEmail&&norm(officialEmail)!==norm(osmEmail); const chosen=officialEmail||osmEmail||''; const provenance=officialEmail?(p.contactPageEmail?'Official website contact page':'Official website homepage'):(osmEmail?'OpenStreetMap / existing prospect data':''); const evidence=[]; if(p.website_live)evidence.push('Official website reachable'); if(officialEmail)evidence.push('Email found on official website'); if(osmEmail)evidence.push('OSM/existing email present'); if(conflict)evidence.push(`Email conflict detected: official website=${officialEmail}; OSM/existing=${osmEmail}`); const confidence=officialEmail?90:(osmEmail?55:20); return [{json:{...p,email:chosen,email_source:provenance,official_email:officialEmail,osm_email:osmEmail,email_conflict:conflict,email_conflict_status:conflict?'Conflict detected':'No conflict',verification_status:conflict?'Needs verification':(officialEmail?'Verified':'Needs verification'),safe_to_outreach:!!officialEmail&&!conflict,confidence,evidence,provenance:{email:provenance},notes:conflict?'Official website email conflicts with OSM/existing email. Review before outreach.':(officialEmail?'Official website email has priority over OSM/existing data.':'No official website email found; do not auto-send using OSM email alone.')}}];"
+      },
+      "id": "11",
+      "name": "Prioritize Official Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {}
+      },
+      "id": "12",
+      "name": "Return Enriched Prospect",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2160,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Enrich Prospect Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Has Website?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Website?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Official Website",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Official Website": {
+      "main": [
+        [
+          {
+            "node": "Extract Homepage Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Homepage Contact": {
+      "main": [
+        [
+          {
+            "node": "Has Contact Page?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Contact Page?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Contact Page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Contact Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Contact Page": {
+      "main": [
+        [
+          {
+            "node": "Extract Contact Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Contact Page": {
+      "main": [
+        [
+          {
+            "node": "Prioritize Official Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Contact Page": {
+      "main": [
+        [
+          {
+            "node": "Prioritize Official Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Website": {
+      "main": [
+        [
+          {
+            "node": "Prioritize Official Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prioritize Official Email": {
+      "main": [
+        [
+          {
+            "node": "Return Enriched Prospect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "7key-enrichment-v2-2",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

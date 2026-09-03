@@ -1,0 +1,144 @@
+{
+  "name": "06 - Prospect Enrichment Multi-Source",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "7key/enrich-prospect",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Enrich Prospect Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json.body || {};\nif (!p.company) throw new Error('company is required');\nconst q = [p.company, p.city, p.country].filter(Boolean).join(' ');\nreturn [{json:{\n  ...p,\n  searchQuery:q,\n  searchUrl:'https://www.google.com/search?q='+encodeURIComponent(q)\n}}];"
+      },
+      "id": "2",
+      "name": "Prepare Enrichment Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://www.google.com/search?q=' + encodeURIComponent($json.searchQuery) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3",
+      "name": "Public Web Search HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $('Prepare Enrichment Query').first().json;\nconst html = String($input.first().json || '');\n\nfunction decode(s=''){return s.replace(/&amp;/g,'&').replace(/&#39;/g,\"'\").replace(/&quot;/g,'\"');}\nfunction pickPhone(t){\n  const m=t.match(/(?:\\+?1[\\s.-]?)?\\(?\\d{3}\\)?[\\s.-]\\d{3}[\\s.-]\\d{4}/);\n  return m?m[0]:'';\n}\nfunction pickEmail(t){\n  const m=t.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);\n  return m?m[0]:'';\n}\nfunction pickWebsite(t){\n  const urls=[...t.matchAll(/https?:\\/\\/[^\\s\"'<>]+/g)].map(m=>decode(m[0]));\n  const bad=/google\\.|gstatic\\.|youtube\\.|facebook\\.|instagram\\.|linkedin\\.|yellowpages\\.|yelp\\.|mapquest\\.|bing\\./i;\n  return urls.find(u=>!bad.test(u))||'';\n}\nconst phone = src.phone || pickPhone(html);\nconst email = src.email || pickEmail(html);\nconst website = src.website || pickWebsite(html);\n\nlet confidence=20;\nconst sources=['OpenStreetMap'];\nif(phone){confidence+=25;sources.push('Public web search');}\nif(email){confidence+=25;if(!sources.includes('Public web search'))sources.push('Public web search');}\nif(website){confidence+=25;if(!sources.includes('Public web search'))sources.push('Public web search');}\n\nlet verification_status='Needs verification';\nif(confidence>=70 && (phone||email) && website) verification_status='Verified';\nelse if(!(phone||email)) verification_status='Not contactable';\n\nreturn [{json:{\n  ...src,\n  phone,\n  email,\n  website,\n  sources,\n  confidence:Math.min(100,confidence),\n  verification_status,\n  contactable:Boolean(phone||email),\n  verified_at:new Date().toISOString()\n}}];"
+      },
+      "id": "4",
+      "name": "Merge Score Confidence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {}
+      },
+      "id": "5",
+      "name": "Return Enriched Prospect",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1060,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Enrich Prospect Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare Enrichment Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Enrichment Query": {
+      "main": [
+        [
+          {
+            "node": "Public Web Search HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Public Web Search HTML": {
+      "main": [
+        [
+          {
+            "node": "Merge Score Confidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Score Confidence": {
+      "main": [
+        [
+          {
+            "node": "Return Enriched Prospect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "00000000-0000-0000-0000-000000000006",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

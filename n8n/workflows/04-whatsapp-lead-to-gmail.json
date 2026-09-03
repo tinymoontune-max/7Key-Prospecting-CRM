@@ -1,0 +1,62 @@
+{
+  "name": "7Key - WhatsApp Lead To Gmail",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "7key/whatsapp-lead",
+        "responseMode": "lastNode"
+      },
+      "id": "wa-webhook",
+      "name": "WhatsApp Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{$json.body.notifyEmail}}",
+        "subject": "={{'WhatsApp prospect \u2014 ' + $json.body.company}}",
+        "emailType": "text",
+        "message": "={{'Prospect: ' + $json.body.company + '\\nCountry: ' + ($json.body.country || '') + '\\nPhone / WhatsApp: ' + $json.body.phone + '\\nWebsite: ' + ($json.body.website || 'Not found') + '\\nScore: ' + ($json.body.score || '') + '\\nWhy target: ' + ($json.body.issue || '') + '\\n\\nREADY MESSAGE:\\n' + ($json.body.message || '')}}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "wa-gmail",
+      "name": "Email WhatsApp Lead",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        280,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_IN_N8N",
+          "name": "7Key Gmail"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "WhatsApp Lead Webhook": {
+      "main": [
+        [
+          {
+            "node": "Email WhatsApp Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}
