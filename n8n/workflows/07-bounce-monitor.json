@@ -1,0 +1,90 @@
+{
+  "name": "7Key - Bounce Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule7",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 25,
+        "filters": {
+          "readStatus": "unread"
+        }
+      },
+      "id": "gmailbounce",
+      "name": "Read Unread Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_IN_N8N",
+          "name": "7Key Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bounceSenderRx=/(mailer-daemon|postmaster|mail delivery subsystem)/i;\\nconst bounceTextRx=/(address not found|recipient address rejected|undeliverable|delivery status notification|delivery has failed|550\\\\s|5\\\\.1\\\\.1|5\\\\.4\\\\.1)/i;\\nconst emailRx=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\\\.[A-Z]{2,}/ig;\\n\\nreturn items.flatMap(item=>{\\n  const j=item.json||{};\\n  const from=String(j.from||j.sender||j.headers?.from||'');\\n  const subject=String(j.subject||'');\\n  const text=String(j.textPlain||j.snippet||j.text||j.html||'');\\n  const all=`${from}\\\\n${subject}\\\\n${text}`;\\n  const isBounce=bounceSenderRx.test(from)||bounceTextRx.test(all);\\n  if(!isBounce) return [];\\n\\n  const emails=[...new Set((all.match(emailRx)||[]).map(x=>x.toLowerCase()))];\\n  const systemDomains=['google.com','gmail.com','googlemail.com','outlook.com','microsoft.com'];\\n  const recipient=emails.find(e=>!systemDomains.some(d=>e.endsWith('@'+d)))||emails[0]||'';\\n  const code=(all.match(/(?:550\\\\s[^\\\\n]*|5\\\\.[0-9]\\\\.[0-9])/i)||[])[0]||'';\\n\\n  return [{json:{\\n    event:'bounce',\\n    bounced:true,\\n    bounced_email:recipient,\\n    bounce_code:code,\\n    bounce_subject:subject,\\n    bounce_reason:(text||subject).slice(0,500),\\n    safe_to_outreach:false,\\n    email_status:'Bounced',\\n    stop_followups:true,\\n    detected_at:new Date().toISOString(),\\n    gmail_message_id:j.id||j.messageId||''\\n  }}];\\n});"
+      },
+      "id": "detectbounce",
+      "name": "Detect Bounce",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Read Unread Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Unread Gmail": {
+      "main": [
+        [
+          {
+            "node": "Detect Bounce",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}
