@@ -22,6 +22,8 @@ type Prospect={
   verification_status?:VerificationStatus; confidence?:number; safe_to_outreach?:boolean;
   evidence?:string[]; provenance?:Record<string,string>; discovery_notes?:string[];
   enrichment_payload?:EnrichmentPayload; wikidata?:string; contactable?:boolean; enriched_at?:string;
+  email_history?:string[]; bounced_emails?:string[]; last_sent_email?:string;
+  email_status?:string; bounce_reason?:string; bounced_at?:string;
 };
 
 const N8N={
@@ -29,7 +31,8 @@ const N8N={
   sendApproved:"http://localhost:5678/webhook/7key/send-approved",
   whatsappLead:"http://localhost:5678/webhook/7key/whatsapp-lead",
   finder:"http://localhost:5678/webhook/7key/find-prospects",
-  enrich:"http://localhost:5678/webhook/7key/enrich-prospect"
+  enrich:"http://localhost:5678/webhook/7key/enrich-prospect",
+  emailEvents:"http://localhost:5678/webhook/7key/email-events"
 };
 
 const STORE="7key-v4.3";
@@ -48,7 +51,13 @@ function normalizeProspect(p:any):Prospect{
     verification_status:(p.verification_status||"Needs verification") as VerificationStatus,
     confidence:Number(p.confidence??0), safe_to_outreach:Boolean(p.safe_to_outreach), evidence:Array.isArray(p.evidence)?p.evidence:[],
     provenance:p.provenance||{}, discovery_notes:Array.isArray(p.discovery_notes)?p.discovery_notes:[],
-    enrichment_payload:p.enrichment_payload, wikidata:p.wikidata||"", contactable:Boolean(p.contactable), enriched_at:p.enriched_at||""
+    enrichment_payload:p.enrichment_payload, wikidata:p.wikidata||"", contactable:Boolean(p.contactable), enriched_at:p.enriched_at||"",
+    email_history:Array.isArray(p.email_history)?p.email_history:[],
+    bounced_emails:Array.isArray(p.bounced_emails)?p.bounced_emails:[],
+    last_sent_email:p.last_sent_email||"",
+    email_status:p.email_status||"",
+    bounce_reason:p.bounce_reason||"",
+    bounced_at:p.bounced_at||""
   };
 }
 
@@ -96,6 +105,121 @@ export default function Home(){
    }catch{}
  },[]);
  useEffect(()=>{try{localStorage.setItem(STORE,JSON.stringify(ps))}catch{}},[ps]);
+
+ async function syncEmailEvents(showResult=false){
+   try{
+     const raw=await postJson(N8N.emailEvents,{},20000);
+     const data=unwrapN8nResponse(raw);
+     const events=Array.isArray(data.events)?data.events:[];
+     if(!events.length){
+       if(showResult) alert("Email sync: no new bounce found.");
+       return;
+     }
+
+     const matchedProspectIds=new Set<string>();
+     for(const p of ps){
+       const known=[
+         p.email,
+         p.last_sent_email,
+         ...(Array.isArray(p.email_history)?p.email_history:[]),
+         ...(Array.isArray(p.bounced_emails)?p.bounced_emails:[])
+       ].filter(Boolean).map(x=>String(x).toLowerCase());
+
+       for(const ev of events){
+         if(ev?.event!=="bounce"||!ev?.bounced_email) continue;
+         const bounced=String(ev.bounced_email).toLowerCase();
+         if(known.includes(bounced)) matchedProspectIds.add(p.id);
+       }
+     }
+     const matched=matchedProspectIds.size;
+
+     setPs(prev=>prev.map(p=>{
+       let next={...p};
+       for(const ev of events){
+         if(ev?.event!=="bounce"||!ev?.bounced_email) continue;
+         const bounced=String(ev.bounced_email).toLowerCase();
+         const known=[
+           p.email,
+           p.last_sent_email,
+           ...(Array.isArray(p.email_history)?p.email_history:[]),
+           ...(Array.isArray(p.bounced_emails)?p.bounced_emails:[])
+         ].filter(Boolean).map(x=>String(x).toLowerCase());
+
+         if(!known.includes(bounced)) continue;
+
+         const bouncedEmails=[...new Set([...(p.bounced_emails||[]),bounced])];
+         const currentIsBounced=String(p.email||"").toLowerCase()===bounced;
+
+         next={
+           ...next,
+           bounced_emails:bouncedEmails,
+           email_status:currentIsBounced?"Bounced":(next.email_status||""),
+           bounce_reason:ev.bounce_reason||next.bounce_reason||"",
+           bounced_at:ev.detected_at||new Date().toISOString(),
+           ...(currentIsBounced?{
+             safe_to_outreach:false,
+             verification_status:"Needs verification",
+             status:"Bounced",
+             approval_status:"bounced"
+           }:{})
+         };
+       }
+       return next;
+     }));
+
+     setN8n("online");
+     if(showResult) alert("Email sync complete: "+events.length+" bounce event(s), "+matched+" prospect match(es).");
+   }catch(err){
+     setN8n("offline");
+     if(showResult) alert("Email sync error: "+(err?.message||err));
+   }
+ }
+
+ useEffect(()=>{
+   const t=setInterval(()=>syncEmailEvents(false),60000);
+   return ()=>clearInterval(t);
+ },[]);
+
+ function showOutreachSummary(){
+   const total=ps.length;
+   const sent=ps.filter(p=>Boolean(p.last_sent_email)||p.status==="Sent"||p.status==="Bounced").length;
+   const delivered=ps.filter(p=>p.status==="Sent"||p.email_status==="Sent").length;
+   const bounced=ps.filter(p=>p.status==="Bounced"||p.email_status==="Bounced"||(p.bounced_emails||[]).length>0).length;
+   const failed=ps.filter(p=>p.status==="Send failed"||p.approval_status==="failed").length;
+   const verified=ps.filter(p=>p.verification_status==="Verified").length;
+   const ready=ps.filter(p=>Boolean(p.subject&&p.message)).length;
+   const safe=ps.filter(p=>p.safe_to_outreach===true).length;
+
+   const lines=ps
+     .filter(p=>Boolean(p.last_sent_email)||p.status==="Sent"||p.status==="Bounced"||p.status==="Send failed")
+     .map(p=>{
+       const email=p.last_sent_email||p.email||"no email";
+       const result=p.status==="Bounced"||p.email_status==="Bounced"
+         ?"BOUNCED"
+         :p.status==="Send failed"||p.approval_status==="failed"
+           ?"FAILED"
+           :"SENT";
+       return "• "+p.company+" | "+email+" | "+result;
+     });
+
+   const details=lines.length
+     ? lines.join("\n")
+     : "No send results recorded yet.";
+
+   alert(
+     "7Key Outreach Summary\n\n"+
+     "Total prospects: "+total+"\n"+
+     "Emails sent/attempted: "+sent+"\n"+
+     "Currently Sent: "+delivered+"\n"+
+     "Bounced: "+bounced+"\n"+
+     "Send failed: "+failed+"\n"+
+     "Verified: "+verified+"\n"+
+     "Drafts ready: "+ready+"\n"+
+     "Safe to outreach: "+safe+"\n\n"+
+     "SEND RESULTS\n"+
+     details
+   );
+ }
 
  const update=(id:string,patch:Partial<Prospect>)=>setPs(prev=>prev.map(p=>p.id===id?{...p,...patch}:p));
  const valid=(p:Prospect)=>{
@@ -151,7 +275,16 @@ export default function Home(){
      const raw=await postJson(N8N.enrich,{...payload,company:p.company,city:p.city,country:p.country,niche:p.niche,phone:p.phone,email:p.email,website:p.website,wikidata:p.wikidata||payload.wikidata||"",source:p.source,id:p.id},25000);
      const data=unwrapN8nResponse(raw);
      update(p.id,{
-       website:data.website||p.website,email:data.email||p.email,phone:data.phone||p.phone,
+       website:data.website||p.website,
+       email:data.email||p.email,
+       email_history:[
+         ...new Set([
+           ...(p.email_history||[]),
+           ...(p.email?[p.email]:[]),
+           ...(data.email?[data.email]:[])
+         ].map(x=>String(x).toLowerCase()))
+       ],
+       phone:data.phone||p.phone,
        verification_status:(data.verification_status||"Needs verification") as VerificationStatus,
        confidence:Number(data.confidence??0),safe_to_outreach:Boolean(data.safe_to_outreach),contactable:Boolean(data.contactable),
        evidence:Array.isArray(data.evidence)?data.evidence:[],provenance:data.provenance||{},discovery_notes:Array.isArray(data.discovery_notes)?data.discovery_notes:[],
@@ -195,6 +328,8 @@ export default function Home(){
    const c=valid(p); if(c.state==="BLOCKED") return alert("Prospect blocked: "+c.e.join(", "));
    if(!p.safe_to_outreach||p.verification_status!=="Verified") return alert("Send blocked: prospect must be Verified and safe_to_outreach=true.");
    if(!p.email) return alert("Email missing");
+   if((p.bounced_emails||[]).map(x=>x.toLowerCase()).includes(p.email.toLowerCase()))
+     return alert("Send blocked: this email address previously bounced.");
    if(!p.subject||!p.message) return alert("Generate the draft first");
    if(!confirm(`Send email to ${p.email}?`)) return;
    setBusy(p.id+":send");
@@ -231,7 +366,12 @@ export default function Home(){
     
     update(p.id,{
       status:"Sent",
-      approval_status:"approved"
+      approval_status:"approved",
+      last_sent_email:p.email,
+      email_history:[
+        ...new Set([...(p.email_history||[]),p.email].filter(Boolean).map(x=>String(x).toLowerCase()))
+      ],
+      email_status:"Sent"
     });
     
     setN8n("online");
@@ -255,8 +395,16 @@ export default function Home(){
  const stats=useMemo(()=>({total:ps.length,verified:ps.filter(p=>p.verification_status==="Verified").length,needs:ps.filter(p=>p.verification_status==="Needs verification").length,sent:ps.filter(p=>p.status==="Sent").length}),[ps]);
 
  return <main>
- <aside><h2>7KeySolutions</h2><span>CRM v4.3.4 · Confirmed Send Gate</span><nav><b><Radar/> Prospect Finder</b><b><Users/> Prospects</b><b><Sparkles/> Enrichment</b><b><Mail/> Email Queue</b><b><Smartphone/> WhatsApp</b><b><ShieldCheck/> Safety</b></nav></aside>
+ <aside><h2>7KeySolutions</h2><span>CRM v4.3.6 · Outreach Summary</span><nav><b><Radar/> Prospect Finder</b><b><Users/> Prospects</b><b><Sparkles/> Enrichment</b><b><Mail/> Email Queue</b><b><Smartphone/> WhatsApp</b><b><ShieldCheck/> Safety</b></nav></aside>
  <section>
+ <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:10}}>
+   <button onClick={showOutreachSummary} disabled={busy!==null}>
+     Outreach summary
+   </button>
+   <button onClick={()=>syncEmailEvents(true)} disabled={busy!==null}>
+     <RefreshCw/> Sync email events
+   </button>
+ </div>
  <header><div><small>7KEY SALES ENGINE</small><h1>CRM + n8n</h1></div><div className="headActions"><button className="ghost" onClick={checkN8n}>{n8n==="online"?<Wifi/>:n8n==="offline"?<WifiOff/>:<RefreshCw/>}{n8n}</button><button onClick={add}><Plus/> Add prospect</button></div></header>
 
  <div className="stats"><div><b>{stats.total}</b><span>Total</span></div><div><b>{stats.verified}</b><span>Verified</span></div><div><b>{stats.needs}</b><span>Needs verify</span></div><div><b>{stats.sent}</b><span>Sent</span></div></div>
